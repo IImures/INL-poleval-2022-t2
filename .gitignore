@@ -2,7 +2,8 @@
 .idea/
 .idea/**
 .idea
-
+.DS_Store
+*.iml
 /shelf/
 /workspace.xml
 # Editor-based HTTP Client requests
