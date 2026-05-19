@@ -2,7 +2,24 @@
 .idea/
 .idea/**
 .idea
-
+.DS_Store
+*.iml
+*.iws
+*.ipr
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.swn
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sublime-workspace
+*.sublime-project
+*.vscode
+*.code-workspace
 /shelf/
 /workspace.xml
 # Editor-based HTTP Client requests
