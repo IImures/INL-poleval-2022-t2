@@ -1,0 +1,15 @@
+{
+  "model_type": "majority_dictionary_baseline",
+  "train_dir": "dataset/train",
+  "dev_dir": "dataset/dev-0",
+  "train_rows": 4290,
+  "dictionary_size": 974,
+  "score_formula": "0.25 * Af + 0.75 * Ab",
+  "evaluation": "case-insensitive exact match",
+  "dev_rows": 305,
+  "dev_scores": {
+    "Af": 0.5573770491803278,
+    "Ab": 0.7016393442622951,
+    "Final": 0.6655737704918032
+  }
+}
