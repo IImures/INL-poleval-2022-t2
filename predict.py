@@ -40,12 +40,6 @@ def main() -> None:
     with majority_path.open("r", encoding="utf-8") as f:
         majority_dictionary = json.load(f)
 
-    candidate_path = model_dir / "candidate_dictionary.json"
-    candidate_dictionary = None
-    if candidate_path.exists():
-        with candidate_path.open("r", encoding="utf-8") as f:
-            candidate_dictionary = json.load(f)
-
     input_rows = load_unlabeled_input(args.input)
 
     if args.method == "majority":
@@ -66,8 +60,6 @@ def main() -> None:
             rows=input_rows,
             expanded_model=expanded_model,
             base_model=base_model,
-            majority_dictionary=majority_dictionary,
-            candidate_dictionary=candidate_dictionary,
         )
 
     write_predictions_tsv(predictions, args.output)

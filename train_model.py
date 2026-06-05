@@ -6,7 +6,7 @@ from pathlib import Path
 
 import joblib
 
-from src.baseline import build_candidate_dictionary, build_majority_dictionary, predict_rows
+from src.baseline import build_majority_dictionary, predict_rows
 from src.data_io import load_labeled_split
 from src.metrics import calculate_scores
 from src.ml_model import predict_with_ml_models, split_prediction_columns, train_label_model
@@ -14,7 +14,7 @@ from src.ml_model import predict_with_ml_models, split_prediction_columns, train
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train abbreviation disambiguation models: majority baseline + TF-IDF LinearSVC classifiers."
+        description="Train abbreviation disambiguation models: majority baseline + TF-IDF LogisticRegression classifiers."
     )
     parser.add_argument("--train-dir", default="dataset/train", help="Path to train split directory")
     parser.add_argument("--dev-dir", default="dataset/dev-0", help="Path to dev split directory")
@@ -49,15 +49,10 @@ def main() -> None:
 
     train_rows = load_labeled_split(args.train_dir)
     majority_dictionary = build_majority_dictionary(train_rows)
-    candidate_dictionary = build_candidate_dictionary(train_rows)
 
     majority_path = model_dir / "majority_dictionary.json"
     with majority_path.open("w", encoding="utf-8") as f:
         json.dump(majority_dictionary, f, ensure_ascii=False, indent=2)
-
-    candidate_path = model_dir / "candidate_dictionary.json"
-    with candidate_path.open("w", encoding="utf-8") as f:
-        json.dump(candidate_dictionary, f, ensure_ascii=False, indent=2)
 
     print("Training expanded-form TF-IDF classifier...")
     expanded_model = train_label_model(train_rows, "expanded")
@@ -70,13 +65,22 @@ def main() -> None:
     joblib.dump(base_model, base_model_path)
 
     metadata = {
-        "model_type": "tfidf_linear_svc_with_majority_baseline",
+        "model_type": "tfidf_logistic_regression_with_local_context_features",
         "train_dir": args.train_dir,
         "dev_dir": args.dev_dir,
         "train_rows": len(train_rows),
         "dictionary_size": len(majority_dictionary),
-        "features": ["word_tfidf_1_2", "char_wb_tfidf_2_5"],
-        "classifier": "LinearSVC(max_iter=5000)",
+        "features": [
+            "abbr",
+            "left_mask_window_8",
+            "right_mask_window_8",
+            "mask_window_8",
+            "full_context",
+            "word_tfidf_1_3",
+            "char_wb_tfidf_3_6",
+        ],
+        "classifier": "LogisticRegression(solver='saga', max_iter=1000, n_jobs=-1)",
+        "ml_prediction_fallback": "none",
         "score_formula": "0.25 * Af + 0.75 * Ab",
         "evaluation": "case-insensitive exact match",
     }
@@ -92,19 +96,17 @@ def main() -> None:
             rows=dev_rows,
             expanded_model=expanded_model,
             base_model=base_model,
-            majority_dictionary=majority_dictionary,
-            candidate_dictionary=candidate_dictionary,
         )
         ml_scores = _score_predictions(dev_rows, ml_predictions)
 
         metadata["dev_rows"] = len(dev_rows)
         metadata["dev_scores"] = {
             "majority_baseline": majority_scores,
-            "tfidf_linear_svc": ml_scores,
+            "tfidf_logistic_regression": ml_scores,
         }
 
         _print_scores("Majority baseline", majority_scores)
-        _print_scores("TF-IDF + LinearSVC", ml_scores)
+        _print_scores("TF-IDF + LogisticRegression", ml_scores)
     else:
         print(f"No expected.tsv in dev dir: {args.dev_dir}. Skipping evaluation.")
 
@@ -113,7 +115,6 @@ def main() -> None:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     print(f"Saved majority dictionary to: {majority_path}")
-    print(f"Saved candidate dictionary to: {candidate_path}")
     print(f"Saved expanded model to: {expanded_model_path}")
     print(f"Saved base model to: {base_model_path}")
     print(f"Saved metadata to: {metadata_path}")

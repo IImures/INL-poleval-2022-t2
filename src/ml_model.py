@@ -3,27 +3,19 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Tuple
 
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import FeatureUnion, Pipeline
-from sklearn.svm import LinearSVC
-
-from src.baseline import predict_for_abbr
-
-
-def _safe_print(message: str) -> None:
-    """Print debug text without crashing on Windows legacy console encodings."""
-    print(message.encode("ascii", errors="backslashreplace").decode("ascii"))
 
 
 def build_tfidf_classifier(random_state: int = 42) -> Pipeline:
-    """Build a memory-efficient TF-IDF + LinearSVC text classifier.
+    """Build a TF-IDF + LogisticRegression text classifier.
 
     The feature set combines:
     - word n-grams for context-level clues,
     - character n-grams for Polish inflection and abbreviation patterns.
 
-    LinearSVC is used instead of LogisticRegression because the task has many
-    possible output labels; multinomial LogisticRegression can require a very
-    large dense optimization workspace for this dataset.
+    The `saga` solver is used because it works better with sparse TF-IDF
+    matrices than the default solver for this many-class text task.
     """
     return Pipeline(
         [
@@ -54,10 +46,10 @@ def build_tfidf_classifier(random_state: int = 42) -> Pipeline:
             ),
             (
                 "clf",
-                LinearSVC(
+                LogisticRegression(
+                    solver="saga",
+                    max_iter=1000,
                     random_state=random_state,
-                    max_iter=5000,
-                    dual="auto",
                 ),
             ),
         ]
@@ -79,10 +71,8 @@ def predict_with_ml_models(
     rows: Iterable[Dict[str, str]],
     expanded_model: Pipeline,
     base_model: Pipeline,
-    majority_dictionary: Dict[str, Dict[str, str]],
-    candidate_dictionary: Dict[str, Dict[str, List[str]]] | None = None,
 ) -> List[Dict[str, str]]:
-    """Predict expanded/base forms with ML models and majority fallback."""
+    """Predict expanded/base forms with ML models only, without dictionary fallback."""
     row_list = list(rows)
     x = [row["input_text"] for row in row_list]
 
@@ -93,27 +83,6 @@ def predict_with_ml_models(
     for row, expanded, base in zip(row_list, expanded_predictions, base_predictions):
         expanded = str(expanded).strip()
         base = str(base).strip()
-        ml_expanded = expanded
-        ml_base = base
-
-        candidates = (candidate_dictionary or {}).get(row["abbr"])
-        impossible_expanded = bool(candidates) and expanded not in candidates["expanded"]
-        impossible_base = bool(candidates) and base not in candidates["base"]
-
-        if not expanded or not base or impossible_expanded or impossible_base:
-            fallback_expanded, fallback_base = predict_for_abbr(row["abbr"], majority_dictionary)
-            _safe_print(
-                "Dictionary fallback used | "
-                f"row_id={row.get('row_id', '')} | "
-                f"abbr={row['abbr']} | "
-                f"ml=({ml_expanded!r}, {ml_base!r}) | "
-                f"dictionary=({fallback_expanded!r}, {fallback_base!r}) | "
-                f"reason="
-                f"empty={not ml_expanded or not ml_base}, "
-                f"impossible_expanded={impossible_expanded}, "
-                f"impossible_base={impossible_base}"
-            )
-            expanded, base = fallback_expanded, fallback_base
 
         predictions.append(
             {
