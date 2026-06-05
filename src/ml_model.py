@@ -9,6 +9,11 @@ from sklearn.svm import LinearSVC
 from src.baseline import predict_for_abbr
 
 
+def _safe_print(message: str) -> None:
+    """Print debug text without crashing on Windows legacy console encodings."""
+    print(message.encode("ascii", errors="backslashreplace").decode("ascii"))
+
+
 def build_tfidf_classifier(random_state: int = 42) -> Pipeline:
     """Build a memory-efficient TF-IDF + LinearSVC text classifier.
 
@@ -30,7 +35,7 @@ def build_tfidf_classifier(random_state: int = 42) -> Pipeline:
                             "word_tfidf",
                             TfidfVectorizer(
                                 analyzer="word",
-                                ngram_range=(1, 2),
+                                ngram_range=(1, 3),
                                 min_df=1,
                                 max_features=10000,
                             ),
@@ -39,7 +44,7 @@ def build_tfidf_classifier(random_state: int = 42) -> Pipeline:
                             "char_tfidf",
                             TfidfVectorizer(
                                 analyzer="char_wb",
-                                ngram_range=(2, 5),
+                                ngram_range=(3, 6),
                                 min_df=1,
                                 max_features=20000,
                             ),
@@ -88,13 +93,27 @@ def predict_with_ml_models(
     for row, expanded, base in zip(row_list, expanded_predictions, base_predictions):
         expanded = str(expanded).strip()
         base = str(base).strip()
+        ml_expanded = expanded
+        ml_base = base
 
         candidates = (candidate_dictionary or {}).get(row["abbr"])
         impossible_expanded = bool(candidates) and expanded not in candidates["expanded"]
         impossible_base = bool(candidates) and base not in candidates["base"]
 
         if not expanded or not base or impossible_expanded or impossible_base:
-            expanded, base = predict_for_abbr(row["abbr"], majority_dictionary)
+            fallback_expanded, fallback_base = predict_for_abbr(row["abbr"], majority_dictionary)
+            _safe_print(
+                "Dictionary fallback used | "
+                f"row_id={row.get('row_id', '')} | "
+                f"abbr={row['abbr']} | "
+                f"ml=({ml_expanded!r}, {ml_base!r}) | "
+                f"dictionary=({fallback_expanded!r}, {fallback_base!r}) | "
+                f"reason="
+                f"empty={not ml_expanded or not ml_base}, "
+                f"impossible_expanded={impossible_expanded}, "
+                f"impossible_base={impossible_base}"
+            )
+            expanded, base = fallback_expanded, fallback_base
 
         predictions.append(
             {
