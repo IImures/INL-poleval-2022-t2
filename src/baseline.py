@@ -23,6 +23,26 @@ def build_majority_dictionary(rows: Iterable[Dict[str, str]]) -> Dict[str, Dict[
     return majority
 
 
+def build_candidate_dictionary(rows: Iterable[Dict[str, str]]) -> Dict[str, Dict[str, List[str]]]:
+    """Store all observed expanded/base candidates for each abbreviation."""
+    expanded_candidates: Dict[str, set[str]] = defaultdict(set)
+    base_candidates: Dict[str, set[str]] = defaultdict(set)
+
+    for row in rows:
+        abbr = row["abbr"]
+        expanded_candidates[abbr].add(row["expanded"])
+        base_candidates[abbr].add(row["base"])
+
+    candidates: Dict[str, Dict[str, List[str]]] = {}
+    for abbr in expanded_candidates:
+        candidates[abbr] = {
+            "expanded": sorted(expanded_candidates[abbr]),
+            "base": sorted(base_candidates[abbr]),
+        }
+
+    return candidates
+
+
 def predict_for_abbr(
     abbr: str,
     majority_dictionary: Dict[str, Dict[str, str]],
