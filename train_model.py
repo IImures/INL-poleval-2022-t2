@@ -1,38 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
-from src.baseline import build_majority_dictionary, predict_rows
+import joblib
+
+from src.baseline import build_candidate_dictionary, build_majority_dictionary, predict_rows
 from src.data_io import load_labeled_split
 from src.metrics import calculate_scores
-from src.ml_model import (
-    build_vocab,
-    describe_device,
-    get_device,
-    predict_with_ml_models,
-    save_model_bundle,
-    split_prediction_columns,
-    train_label_model,
-)
+from src.ml_model import predict_with_ml_models, split_prediction_columns, train_label_model
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train abbreviation disambiguation models: majority baseline + PyTorch text classifiers."
+        description="Train abbreviation disambiguation models: majority baseline + TF-IDF LinearSVC classifiers."
     )
     parser.add_argument("--train-dir", default="dataset/train", help="Path to train split directory")
     parser.add_argument("--dev-dir", default="dataset/dev-0", help="Path to dev split directory")
     parser.add_argument("--model-dir", default="models", help="Output directory for saved artifacts")
-    parser.add_argument("--device", default="auto", help="Torch device: auto, cuda, or cpu")
-    parser.add_argument("--epochs", type=int, default=20, help="Training epochs per model")
-    parser.add_argument("--batch-size", type=int, default=128, help="Training batch size")
-    parser.add_argument("--predict-batch-size", type=int, default=256, help="Evaluation prediction batch size")
-    parser.add_argument("--learning-rate", type=float, default=1e-3, help="AdamW learning rate")
-    parser.add_argument("--max-length", type=int, default=192, help="Maximum tokens per example")
-    parser.add_argument("--max-vocab-size", type=int, default=50000, help="Maximum vocabulary size")
-    parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension")
-    parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden layer dimension")
     return parser.parse_args()
 
 
@@ -60,48 +46,45 @@ def main() -> None:
     args = parse_args()
     model_dir = Path(args.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
-    device = get_device(args.device)
-    print(f"Using device: {describe_device(device)}")
 
     train_rows = load_labeled_split(args.train_dir)
-    vocab = build_vocab(train_rows, max_vocab_size=args.max_vocab_size)
+    majority_dictionary = build_majority_dictionary(train_rows)
+    candidate_dictionary = build_candidate_dictionary(train_rows)
 
-    print("Training expanded-form PyTorch classifier...")
-    expanded_model = train_label_model(
-        rows=train_rows,
-        label_key="expanded",
-        vocab=vocab,
-        device=device,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        max_length=args.max_length,
-        embedding_dim=args.embedding_dim,
-        hidden_dim=args.hidden_dim,
-    )
-    expanded_model_path = model_dir / "expanded_torch_model.pt"
-    save_model_bundle(expanded_model, expanded_model_path, vocab)
+    majority_path = model_dir / "majority_dictionary.json"
+    with majority_path.open("w", encoding="utf-8") as f:
+        json.dump(majority_dictionary, f, ensure_ascii=False, indent=2)
 
-    print("Training base-form PyTorch classifier...")
-    base_model = train_label_model(
-        rows=train_rows,
-        label_key="base",
-        vocab=vocab,
-        device=device,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        max_length=args.max_length,
-        embedding_dim=args.embedding_dim,
-        hidden_dim=args.hidden_dim,
-    )
-    base_model_path = model_dir / "base_torch_model.pt"
-    save_model_bundle(base_model, base_model_path, vocab)
+    candidate_path = model_dir / "candidate_dictionary.json"
+    with candidate_path.open("w", encoding="utf-8") as f:
+        json.dump(candidate_dictionary, f, ensure_ascii=False, indent=2)
+
+    print("Training expanded-form TF-IDF classifier...")
+    expanded_model = train_label_model(train_rows, "expanded")
+    expanded_model_path = model_dir / "expanded_model.joblib"
+    joblib.dump(expanded_model, expanded_model_path)
+
+    print("Training base-form TF-IDF classifier...")
+    base_model = train_label_model(train_rows, "base")
+    base_model_path = model_dir / "base_model.joblib"
+    joblib.dump(base_model, base_model_path)
+
+    metadata = {
+        "model_type": "tfidf_linear_svc_with_majority_baseline",
+        "train_dir": args.train_dir,
+        "dev_dir": args.dev_dir,
+        "train_rows": len(train_rows),
+        "dictionary_size": len(majority_dictionary),
+        "features": ["word_tfidf_1_2", "char_wb_tfidf_2_5"],
+        "classifier": "LinearSVC(max_iter=5000)",
+        "score_formula": "0.25 * Af + 0.75 * Ab",
+        "evaluation": "case-insensitive exact match",
+    }
 
     dev_expected_path = Path(args.dev_dir) / "expected.tsv"
     if dev_expected_path.exists():
         dev_rows = load_labeled_split(args.dev_dir)
-        majority_dictionary = build_majority_dictionary(train_rows)
+
         majority_predictions = predict_rows(dev_rows, majority_dictionary)
         majority_scores = _score_predictions(dev_rows, majority_predictions)
 
@@ -109,19 +92,31 @@ def main() -> None:
             rows=dev_rows,
             expanded_model=expanded_model,
             base_model=base_model,
-            vocab=vocab,
-            device=device,
-            batch_size=args.predict_batch_size,
+            majority_dictionary=majority_dictionary,
+            candidate_dictionary=candidate_dictionary,
         )
         ml_scores = _score_predictions(dev_rows, ml_predictions)
 
+        metadata["dev_rows"] = len(dev_rows)
+        metadata["dev_scores"] = {
+            "majority_baseline": majority_scores,
+            "tfidf_linear_svc": ml_scores,
+        }
+
         _print_scores("Majority baseline", majority_scores)
-        _print_scores("PyTorch classifier", ml_scores)
+        _print_scores("TF-IDF + LinearSVC", ml_scores)
     else:
         print(f"No expected.tsv in dev dir: {args.dev_dir}. Skipping evaluation.")
 
+    metadata_path = model_dir / "metadata.json"
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    print(f"Saved majority dictionary to: {majority_path}")
+    print(f"Saved candidate dictionary to: {candidate_path}")
     print(f"Saved expanded model to: {expanded_model_path}")
     print(f"Saved base model to: {base_model_path}")
+    print(f"Saved metadata to: {metadata_path}")
 
 
 if __name__ == "__main__":
